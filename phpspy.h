@@ -35,6 +35,18 @@
 #include <regex.h>
 #endif
 
+#ifdef PHPSPY_DARWIN
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+
+#define PTRACE_TRACEME PT_TRACE_ME
+#define PTRACE_DETACH PT_DETACH
+#define PTRACE_ATTACH PT_ATTACH
+#define phpspy_ptrace(request, pid, addr, data) ptrace(request, pid, 0, 0)
+#else
+#define phpspy_ptrace(request, pid, addr, data) ptrace(request, pid, addr, data)
+#endif
+
 #ifdef USE_ZEND
 #include <main/php_config.h>
 #undef ZEND_DEBUG

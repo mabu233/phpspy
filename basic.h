@@ -1,6 +1,7 @@
 #ifndef BASIC_H
 #define BASIC_H
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 
@@ -58,6 +59,7 @@ int gettimeofday(struct timeval* p, void* z);
 
 /* Thread */
 #ifndef PHPSPY_WIN32
+#include <pthread.h>
 
 typedef pthread_t phpspy_thread_t;
 typedef pthread_attr_t phpspy_thread_attr_t;

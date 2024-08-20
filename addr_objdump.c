@@ -90,12 +90,20 @@ static int get_php_bin_path(pid_t pid, char *path_root, char *path) {
     if (shell_escape(opt_libname_awk_patt, libname, sizeof(libname), "opt_libname_awk_patt")) {
         return 1;
     }
-    char *cmd_fmt = "awk -ve=1 -vp=%s '$0~p{print $NF; e=0; exit} END{exit e}' /proc/%d/maps"
+#ifdef PHPSPY_DARWIN
+    char *cmd_fmt = "vmmap %d 2>/dev/null | awk -ve=1 -vq=\"Path\" -vp=%s '$0~p{print $NF; e=0; exit} $0~q{path=$NF} END{if (e) print path}'"
+        " || echo %d > /dev/null";
+#else
+    char *cmd_fmt = "cat /proc/%d/maps | awk -ve=1 -vp=%s '$0~p{print $NF; e=0; exit} END{exit e}'"
         " || readlink /proc/%d/exe";
-    if (popen_read_line(buf, sizeof(buf), cmd_fmt, libname, (int)pid, (int)pid) != 0) {
+#endif
+    if (popen_read_line(buf, sizeof(buf), cmd_fmt, (int)pid, libname, (int)pid) != 0) {
         log_error("get_php_bin_path: Failed\n");
         return 1;
     }
+#ifdef PHPSPY_DARWIN
+    strcpy(path_root, buf);
+#else
     if (snprintf(path_root, PHPSPY_STR_SIZE, "/proc/%d/root/%s", (int)pid, buf) > PHPSPY_STR_SIZE - 1) {
         log_error("get_php_bin_path: snprintf overflow\n");
         return 1;
@@ -103,6 +111,7 @@ static int get_php_bin_path(pid_t pid, char *path_root, char *path) {
     if (access(path_root, F_OK) != 0) {
         snprintf(path_root, PHPSPY_STR_SIZE, "/proc/%d/exe", (int)pid);
     }
+#endif
     strcpy(path, buf);
     return 0;
 }
@@ -121,11 +130,15 @@ static int get_php_base_addr(pid_t pid, char *path_root, char *path, uint64_t *r
     char arg_buf[PHPSPY_STR_SIZE];
     uint64_t start_addr;
     uint64_t virt_addr;
-    char *cmd_fmt = "grep -m1 ' '%s\\$ /proc/%d/maps";
+#ifdef PHPSPY_DARWIN
+    char *cmd_fmt = "vmmap %d 2>/dev/null | grep __TEXT | awk -vp=%s '$0~p{print $2; exit}'";
+#else
+    char *cmd_fmt = "cat /proc/%d/maps | grep -m1 ' '%s\\$";
+#endif
     if (shell_escape(path, arg_buf, sizeof(arg_buf), "path")) {
         return 1;
     }
-    if (popen_read_line(buf, sizeof(buf), cmd_fmt, arg_buf, (int)pid) != 0) {
+    if (popen_read_line(buf, sizeof(buf), cmd_fmt, (int)pid, arg_buf) != 0) {
         log_error("get_php_base_addr: Failed to get start_addr\n");
         return 1;
     }
@@ -133,7 +146,11 @@ static int get_php_base_addr(pid_t pid, char *path_root, char *path, uint64_t *r
     if (shell_escape(path_root, arg_buf, sizeof(arg_buf), "path_root")) {
         return 1;
     }
+#ifdef PHPSPY_DARWIN
+    cmd_fmt = "objdump -Tt %s 2>/dev/null | awk -ve=1 '/__mh_execute_header/{print $1; e=0; exit} END {if (e) print 0'}";
+#else
     cmd_fmt = "objdump -p %s | awk '/LOAD/{print $5; exit}'";
+#endif
     if (popen_read_line(buf, sizeof(buf), cmd_fmt, arg_buf) != 0) {
         log_error("get_php_base_addr: Failed to get virt_addr\n");
         return 1;
@@ -146,7 +163,7 @@ static int get_php_base_addr(pid_t pid, char *path_root, char *path, uint64_t *r
 static int get_symbol_offset(char *path_root, const char *symbol, uint64_t *raddr) {
     char buf[PHPSPY_STR_SIZE];
     char arg_buf[PHPSPY_STR_SIZE];
-    char *cmd_fmt = "objdump -Tt %s | awk '/ %s$/{print $1; exit}'";
+    char *cmd_fmt = "objdump -Tt %s 2>/dev/null | awk '/%s$/{print $1; exit}'";
     if (shell_escape(path_root, arg_buf, sizeof(arg_buf), "path_root")) {
         return 1;
     }

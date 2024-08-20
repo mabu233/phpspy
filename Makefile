@@ -29,6 +29,10 @@ else ifneq ($(git_sha),)
   phpspy_defines:=$(phpspy_defines) -DCOMMIT=$(git_sha)
 endif
 
+ifeq ($(shell uname -s), Darwin)
+    phpspy_defines:=$(phpspy_defines) -DPHPSPY_DARWIN
+endif
+
 all: phpspy
 
 phpspy: $(wildcard *.c *.h) vendor/termbox2/termbox2.h

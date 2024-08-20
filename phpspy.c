@@ -495,7 +495,7 @@ static int main_fork(int argc, char **argv) {
     if (fork_pid == 0) {
         redirect_child_stdio(STDOUT_FILENO, opt_path_child_out);
         redirect_child_stdio(STDERR_FILENO, opt_path_child_err);
-        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        phpspy_ptrace(PTRACE_TRACEME, 0, NULL, NULL);
         execvp(argv[optind], argv + optind);
         perror("execvp");
         exit(1);
@@ -508,7 +508,7 @@ static int main_fork(int argc, char **argv) {
     if (!WIFSTOPPED(status) || WSTOPSIG(status) != SIGTRAP) {
         log_error("main_fork: Expected SIGTRAP from child\n");
     }
-    ptrace(PTRACE_DETACH, fork_pid, NULL, NULL);
+    phpspy_ptrace(PTRACE_DETACH, fork_pid, NULL, NULL);
     rv = main_pid(fork_pid);
     waitpid(fork_pid, NULL, 0);
     return rv;
@@ -592,7 +592,7 @@ static void cleanup() {
 static int pause_pid(pid_t pid) {
 #ifndef PHPSPY_WIN32
     int rv;
-    if (ptrace(PTRACE_ATTACH, pid, 0, 0) == -1) {
+    if (phpspy_ptrace(PTRACE_ATTACH, pid, 0, 0) == -1) {
         rv = errno;
         perror("ptrace");
         return PHPSPY_ERR + (rv == ESRCH ? PHPSPY_ERR_PID_DEAD : 0);
@@ -608,7 +608,7 @@ static int pause_pid(pid_t pid) {
 static int unpause_pid(pid_t pid) {
 #ifndef PHPSPY_WIN32
     int rv;
-    if (ptrace(PTRACE_DETACH, pid, 0, 0) == -1) {
+    if (phpspy_ptrace(PTRACE_DETACH, pid, 0, 0) == -1) {
         rv = errno;
         perror("ptrace");
         return PHPSPY_ERR + (rv == ESRCH ? PHPSPY_ERR_PID_DEAD : 0);
@@ -826,7 +826,7 @@ static void glopeek_add(char *glospec) {
     HASH_ADD_STR(glopeek_map, key, gentry);
 }
 
-#ifndef PHPSPY_WIN32
+#if !defined(PHPSPY_WIN32) && !defined(PHPSPY_DARWIN)
 static int copy_proc_mem(pid_t pid, const char *what, void *raddr, void *laddr, size_t size) {
     struct iovec local[1];
     struct iovec remote[1];
@@ -852,9 +852,34 @@ static int copy_proc_mem(pid_t pid, const char *what, void *raddr, void *laddr, 
 
     return PHPSPY_OK;
 }
+#endif
 
-#else
+#ifdef PHPSPY_DARWIN
+static int copy_proc_mem(pid_t pid, const char *what, void *raddr, void *laddr, size_t size) {
+    mach_port_t task;
+    kern_return_t rv;
+    mach_vm_size_t bytesRead;
 
+    rv = task_for_pid(mach_task_self(), pid, &task);
+    if (rv != KERN_SUCCESS) {
+        fprintf(stderr, "Failed to get task port: %s\n", mach_error_string(rv));
+        return PHPSPY_ERR;
+    }
+    rv = vm_read_overwrite(task, (mach_vm_address_t)raddr, (mach_vm_size_t)size, (mach_vm_address_t)laddr, &bytesRead);
+    if (rv != KERN_SUCCESS) {
+        if (bytesRead == 0) {
+            perror("process_vm_readv");
+            return PHPSPY_ERR | PHPSPY_ERR_PID_DEAD;
+        }
+        log_error("copy_proc_mem: Failed to copy %s; err=%d raddr=%p size=%lu\n", what, mach_error_string(rv), raddr, size);
+        return PHPSPY_ERR;
+    }
+
+    return PHPSPY_OK;
+}
+#endif
+
+#ifdef PHPSPY_WIN32
 static int copy_proc_mem(pid_t pid, const char *what, void *raddr, void *laddr, size_t size) {
     size_t bytesRead;
     HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
@@ -876,7 +901,6 @@ static int copy_proc_mem(pid_t pid, const char *what, void *raddr, void *laddr, 
 
     return PHPSPY_OK;
 }
-
 #endif
 
 #ifndef USE_ZEND
@@ -904,17 +928,27 @@ static int get_php_version(trace_target_t *target) {
         if (shell_escape(opt_libname_awk_patt, libname, sizeof(libname), "opt_libname_awk_patt")) {
             return PHPSPY_ERR;
         }
-        int n = snprintf(
-            version_cmd,
-            sizeof(version_cmd),
-            "{ echo -n /proc/%d/root/; "
+#ifdef PHPSPY_DARWIN
+        char *cmd_fmt = "vmmap %d 2>/dev/null | "
+            "awk -ve=1 -vq=\"Path\" -vp=%s '$0~p{print $NF; e=0; exit} $0~q{path=$NF} END{if (e) print path}' "
+            "| xargs strings "
+            "| grep -Eo 'X-Powered-By: PHP/[0-9]+\\.[0-9]+' "
+            "| grep -Eo '[0-9]+\\.[0-9]+' "
+            "|| echo %d%d%d > /dev/null";
+#else
+        char *cmd_fmt = "{ echo -n /proc/%d/root/; "
             "  awk -ve=1 -vp=%s '$0~p{print $NF; e=0; exit} END{exit e}' /proc/%d/maps "
             "  || readlink /proc/%d/exe; } "
             "| { xargs stat --printf=%%n 2>/dev/null || echo /proc/%d/exe; } "
             "| xargs strings "
             "| grep -Eo 'X-Powered-By: PHP/[0-9]+\\.[0-9]+' "
-            "| grep -Eo '[0-9]+\\.[0-9]+' ",
-            pid, libname, pid, pid, pid
+            "| grep -Eo '[0-9]+\\.[0-9]+' ";
+#endif
+        int n = snprintf(
+                version_cmd,
+                sizeof(version_cmd),
+                cmd_fmt,
+                pid, libname, pid, pid, pid
         );
         if ((size_t)n >= sizeof(version_cmd) - 1) {
             log_error("get_php_version: snprintf overflow\n");
