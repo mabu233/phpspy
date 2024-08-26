@@ -193,7 +193,7 @@ static int block_all_signals() {
     int rv;
     sigset_t set;
     try(rv, sigfillset(&set));
-    try(rv, sigprocmask(SIG_BLOCK, &set, NULL));
+    try(rv, pthread_sigmask(SIG_BLOCK, &set, NULL));
 #endif
     return 0;
 }

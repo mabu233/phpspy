@@ -131,7 +131,7 @@ static int get_php_base_addr(pid_t pid, char *path_root, char *path, uint64_t *r
     uint64_t start_addr;
     uint64_t virt_addr;
 #ifdef PHPSPY_DARWIN
-    char *cmd_fmt = "vmmap %d 2>/dev/null | grep __TEXT | awk -vp=%s '$0~p{print $2; exit}'";
+    char *cmd_fmt = "vmmap %d 2>/dev/null | grep __TEXT | awk -vp=%s '$0~p{print $2;}'";
 #else
     char *cmd_fmt = "cat /proc/%d/maps | grep -m1 ' '%s\\$";
 #endif
